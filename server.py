@@ -1,5 +1,6 @@
 import flwr as fl
 from typing import List, Tuple
+import torch
 
 # Define the aggregation strategy
 class SaveAndAggregate(fl.server.strategy.FedAvg):
