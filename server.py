@@ -1,88 +1,37 @@
-import socket
-import os
+import flwr as fl
+from typing import List, Tuple
 
-# Server settings
-server_ip = '0.0.0.0'  # Listen on all available interfaces
-server_port = 5001
-save_dir = 'received_weights'  # Directory to save received weights
-os.makedirs(save_dir, exist_ok=True)  # Create directory if it doesn't exist
+# Define the aggregation strategy
+class SaveAndAggregate(fl.server.strategy.FedAvg):
+    def aggregate_fit(
+        self, rnd: int, results: List[Tuple[fl.server.client_proxy.ClientProxy, fl.common.FitRes]], failures: List[BaseException]
+    ) -> Tuple[List[float], dict]:
+        # Call the super class's aggregation function
+        aggregated_parameters, aggregation_info = super().aggregate_fit(rnd, results, failures)
 
-# Dictionary to store client and aggregated parameters for each round
-parameters_storage = {
-    'client_parameters': [],
-    'aggregated_parameters': []
-}
+        # Save aggregated parameters to disk
+        if aggregated_parameters is not None:
+            aggregated_weights = fl.common.parameters_to_ndarrays(aggregated_parameters)
+            path = f"server_aggregated_round_{rnd}.pt"
+            with open(path, "wb") as f:
+                torch.save(aggregated_weights, f)
+            print(f"Aggregated model saved at {path}")
 
-def save_weights(client_id, file_data):
-    file_path = os.path.join(save_dir, f'client_{client_id}_weights.pt')
-    with open(file_path, 'wb') as f:
-        f.write(file_data)
-    print(f"Saved weights for client {client_id} at {file_path}")
+        return aggregated_parameters, aggregation_info
 
-def aggregate_parameters():
-    # Dummy aggregation logic
-    # In a real-world FL scenario, you'd implement proper aggregation here (e.g., FedAvg)
-    print("Aggregating client parameters...")
-    # Simulate saving aggregated parameters
-    aggregated_params_path = os.path.join(save_dir, f'aggregated_weights_round.pt')
-    with open(aggregated_params_path, 'wb') as f:
-        f.write(b'aggregated_parameters_data')  # Placeholder for actual data
-    print(f"Aggregated parameters saved at {aggregated_params_path}")
-    return aggregated_params_path
+# Start Flower server
+def start_server():
+    strategy = SaveAndAggregate(
+        min_fit_clients=1,  # Minimum number of clients to participate in a round of training
+        min_available_clients=1,  # Minimum number of total clients that need to be connected to the server
+    )
 
-def send_aggregated_weights(client_socket, aggregated_file_path):
-    # Send the aggregated weights back to the client
-    with open(aggregated_file_path, 'rb') as f:
-        while True:
-            data = f.read(1024)
-            if not data:
-                break
-            client_socket.sendall(data)
-    print(f"Aggregated weights sent back to client.")
-
-def main():
-    # Create a socket object
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((server_ip, server_port))
-    server_socket.listen(5)
-    print(f"Server listening on {server_ip}:{server_port}")
-
-    round_number = 1  # Round counter for federated learning rounds
-
-    while True:
-        print(f"\nWaiting for clients to send model weights for round {round_number}...")
-
-        # Accept client connection
-        client_socket, client_address = server_socket.accept()
-        print(f"Connected by {client_address}")
-
-        # Receive the file data from the client
-        file_data = b''
-        while True:
-            data = client_socket.recv(1024)
-            if not data:
-                break
-            file_data += data
-
-        # Save received weights for this client
-        client_id = client_address[1]  # Using port number as a proxy for client_id
-        save_weights(client_id, file_data)
-
-        # Add client parameters to storage (for aggregation later)
-        parameters_storage['client_parameters'].append(file_data)
-
-        # Aggregate parameters after receiving from all clients (assuming 1 client for now)
-        if len(parameters_storage['client_parameters']) == 1:
-            aggregated_file_path = aggregate_parameters()
-            parameters_storage['aggregated_parameters'].append(b'aggregated_data')  # Simulate storage
-
-            # Send the aggregated weights back to the client
-            send_aggregated_weights(client_socket, aggregated_file_path)
-
-            # Close the client connection after sending the file
-            client_socket.close()
-
-            round_number += 1  # Proceed to next round
+    # Start the Flower server
+    fl.server.start_server(
+        server_address="0.0.0.0:8000",  # Server IP and port
+        strategy=strategy,
+        config=fl.server.ServerConfig(num_rounds=3),  # Configure the number of FL rounds
+    )
 
 if __name__ == "__main__":
-    main()
+    start_server()
